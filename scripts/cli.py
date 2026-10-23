@@ -21,7 +21,9 @@ from account_manager import (
 )
 from chrome_launcher import DEFAULT_PORT, ensure_chrome
 from doctor import run_doctor
-from douyin.cdp import Browser
+from douyin.cdp import Browser, Page
+from douyin_target_selector import select_target, SNAPSHOT_EXPRESSION, is_douyin_url, classify_login_result, DouyinTargetError
+from douyin.account_feed import list_user_posts, resolve_user
 from douyin.interact import (
     comment_video,
     favorite_video,
@@ -166,7 +168,7 @@ def _connect(args: argparse.Namespace):
         raise ValueError("出于安全考虑，--host 只允许 localhost、127.0.0.1 或 ::1")
     user_data_dir = _resolve_account(args)
     desired_headless = not getattr(args, "headed", False)
-    if not ensure_chrome(
+    if not os.environ.get("DOUYIN_TARGET_ID") and not ensure_chrome(
         port=args.port,
         headless=desired_headless,
         user_data_dir=user_data_dir,
@@ -175,10 +177,16 @@ def _connect(args: argparse.Namespace):
         raise RuntimeError("无法启动 Chrome")
     browser = Browser(host=args.host, port=args.port)
     browser.connect()
-    saved = _load_session_tab(args.port)
-    page = browser.get_page_by_target_id(saved) if saved else None
-    if not page:
-        page = browser.get_or_create_page()
+    targets = browser.list_pages()
+    def probe(target):
+        page = Page(args.host, args.port, str(target.get("targetId") or target.get("id")))
+        return page.evaluate(SNAPSHOT_EXPRESSION)
+    selected, metadata = select_target(
+        targets, probe, pinned_id=os.environ.get("DOUYIN_TARGET_ID", ""),
+        saved_id=_load_session_tab(args.port) or "",
+    )
+    page = Page(args.host, args.port, metadata["selected_target_id"])
+    page.target_metadata = metadata
     _save_session_tab(page.target_id, args.port)
     return browser, page
 
@@ -212,8 +220,10 @@ def cmd_set_default_account(args: argparse.Namespace) -> None:
     _output({"success": True, "default": args.name})
 
 
-def cmd_doctor(_args: argparse.Namespace) -> None:
+def cmd_doctor(args: argparse.Namespace) -> None:
     result = run_doctor()
+    _browser, page = _connect(args)
+    result.update(page.target_metadata)
     _output(result, exit_code=0 if result.get("success") else 2)
 
 
@@ -223,27 +233,25 @@ def cmd_version(_args: argparse.Namespace) -> None:
 
 def cmd_check_login(args: argparse.Namespace) -> None:
     adapter = get_default_adapter()
-    _browser, page = _connect(args)
-    adapter.navigate_home(page)
-    page.wait_for_load(20)
+    try:
+        _browser, page = _connect(args)
+    except DouyinTargetError as exc:
+        reason = str(exc).split(":", 1)[0]
+        _output({"success": False, "logged_in": None, "reason": reason,
+                 "page_health": "UPSTREAM_BAD_GATEWAY" if reason == "DOUYIN_UPSTREAM_BAD_GATEWAY" else "UNKNOWN",
+                 "auth_evidence": "UNCONFIRMED",
+                 "preflight_status": "UPSTREAM_BAD_GATEWAY" if reason == "DOUYIN_UPSTREAM_BAD_GATEWAY" else "TARGET_MISSING" if reason == "DOUYIN_TARGET_MISSING" else "RUNTIME_FAIL"}, exit_code=2)
+    # Preflight is read-only: preserve the selected page and Chrome mode.
     state = settle_login_state(page, adapter=adapter)
-    switched = _maybe_switch_to_headed_for_risk(
-        args,
-        state,
-        "检测到验证码/风控页",
-        adapter,
-        accept_recovered_login=True,
-    )
-    if switched:
-        exit_code = (
-            2
-            if switched.get("needs_user_verification")
-            else 0
-            if switched.get("logged_in")
-            else 1
-        )
-        _output(switched, exit_code=exit_code)
-    _output(state, exit_code=0 if state.get("logged_in") else 1)
+    live = page.evaluate(SNAPSHOT_EXPRESSION)
+    if not isinstance(live, dict) or not is_douyin_url(live.get("url")):
+        _output({"success": False, "error": "DOUYIN_TARGET_INVALID",
+                 "logged_in": None, "target_selection_invalid": True}, exit_code=2)
+    state.update(page.target_metadata)
+    state.update(selected_url=live["url"], selected_title=live.get("title", ""))
+    state = classify_login_result(state, live)
+    status = state["preflight_status"]
+    _output(state, exit_code=0 if status == "PASS" else 1 if status == "AUTH_REQUIRED" else 2)
 
 
 def cmd_get_qrcode(args: argparse.Namespace) -> None:
@@ -303,6 +311,36 @@ def cmd_search_videos(args: argparse.Namespace) -> None:
     result = search_videos(page, args.keyword, limit=args.limit, adapter=adapter)
     switched = _maybe_switch_to_headed_for_risk(
         args, result, "搜索页检测到验证码/风控", adapter
+    )
+    if switched:
+        _output(switched, exit_code=2)
+    _output(result, exit_code=0 if result.get("success") else 2)
+
+
+def cmd_resolve_user(args: argparse.Namespace) -> None:
+    adapter = get_default_adapter()
+    _browser, page = _connect(args)
+    result = resolve_user(page, args.nickname, adapter=adapter)
+    switched = _maybe_switch_to_headed_for_risk(
+        args, result, "账号搜索页检测到验证码/风控", adapter
+    )
+    if switched:
+        _output(switched, exit_code=2)
+    _output(result, exit_code=0 if result.get("success") else 2)
+
+
+def cmd_list_user_posts(args: argparse.Namespace) -> None:
+    adapter = get_default_adapter()
+    _browser, page = _connect(args)
+    result = list_user_posts(
+        page,
+        args.sec_uid,
+        cursor=args.cursor,
+        count=args.count,
+        adapter=adapter,
+    )
+    switched = _maybe_switch_to_headed_for_risk(
+        args, result, "账号主页作品页检测到验证码/风控", adapter
     )
     if switched:
         _output(switched, exit_code=2)
@@ -629,6 +667,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keyword", required=True)
     p.add_argument("--limit", type=_valid_search_limit, default=7)
 
+    p = sub.add_parser("resolve-user")
+    p.add_argument("--nickname", required=True)
+
+    p = sub.add_parser("list-user-posts")
+    p.add_argument("--sec-uid", required=True)
+    p.add_argument("--cursor", default="0")
+    p.add_argument("--count", type=int, default=18)
+
     sub.add_parser("get-trending-topics")
 
     p = sub.add_parser("get-video-detail")
@@ -710,6 +756,8 @@ def main(argv: list[str] | None = None) -> None:
         "send-code": cmd_send_code,
         "verify-code": cmd_verify_code,
         "search-videos": cmd_search_videos,
+        "resolve-user": cmd_resolve_user,
+        "list-user-posts": cmd_list_user_posts,
         "get-trending-topics": cmd_get_trending_topics,
         "get-video-detail": cmd_get_video_detail,
         "fill-publish-image": cmd_fill_publish_image,

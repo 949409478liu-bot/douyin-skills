@@ -156,7 +156,7 @@ def search_videos(
                 const href = a.href || a.getAttribute('href') || '';
                 if (seen.has(href) || !contentPathFragments.some(fragment => href.includes(fragment))) continue;
                 seen.add(href);
-                const card = a ? (a.closest('li, article, section, div') || a) : null;
+                const card = a ? (a.closest('.search-result-card, [data-e2e="search-result-item"]') || a.closest('li, article, section, div') || a) : null;
                 const cardText = ((card && card.innerText) || (a && a.innerText) || '').trim();
                 const lines = cardText.split(/\n/).map(x => x.trim()).filter(Boolean);
                 const cleaned = lines.filter(x => x && !x.startsWith('@') && !/^(\d{{1,2}}:\d{{2}}|\d{{1,2}}:\d{{2}}:\d{{2}})$/.test(x) && !/^(\d+(\.\d+)?[万亿]?\+?)$/.test(x.replace(/,/g, '')) && x !== '合集');

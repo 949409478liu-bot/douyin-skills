@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "source": {"kind": "synthetic", "contains_real_account_data": false},
+  "resolved": {
+    "nickname": "Synthetic Hair Teacher",
+    "candidates": [
+      {"sec_uid": "MS4wLjABAAAAsynthetic_account_01", "display_name": "Synthetic Hair Teacher", "exact_match": true}
+    ]
+  },
+  "ambiguous": {
+    "nickname": "Synthetic Same Name",
+    "candidates": [
+      {"sec_uid": "MS4wLjABAAAAsynthetic_account_02", "display_name": "Synthetic Same Name", "exact_match": true},
+      {"sec_uid": "MS4wLjABAAAAsynthetic_account_03", "display_name": "Synthetic Same Name", "exact_match": true}
+    ]
+  },
+  "pages": [
+    {
+      "cursor": "0",
+      "max_cursor": 100,
+      "has_more": 1,
+      "video_ids": ["1000000000000000001", "1000000000000000002"]
+    },
+    {
+      "cursor": "100",
+      "max_cursor": 200,
+      "has_more": 0,
+      "video_ids": ["1000000000000000001", "1000000000000000003"]
+    }
+  ]
+}

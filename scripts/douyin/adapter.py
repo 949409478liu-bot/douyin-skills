@@ -44,8 +44,8 @@ DOUYIN_SELECTORS = PlatformSelectors(
     submit_code_texts=("登录", "确定", "验证", "提交"),
     agreement_text="已阅读并同意",
     search_result_selectors=(
-        'a[href*="/video/"]',
-        'a[href*="/note/"]',
+        '.search-result-card a[href*="/video/"]',
+        '.search-result-card a[href*="/note/"]',
         '[data-e2e="search-result-item"] a',
     ),
     feed_card_selector="div[data-aweme-id]",

@@ -30,6 +30,8 @@ class CliTests(unittest.TestCase):
             "remove-account",
             "set-default-account",
             "search-videos",
+            "resolve-user",
+            "list-user-posts",
             "get-trending-topics",
             "get-video-detail",
             "fill-publish-image",
